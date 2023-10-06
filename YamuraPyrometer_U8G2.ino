@@ -44,7 +44,10 @@
 #define DEBUG_HTML
 // uncomment for RTC module attached
 #define HAS_RTC
-
+// uncomment for thermocouple module attached
+#define HAS_THERMO
+// uncomment to write INI file
+//#define WRITE_INI
 // SPI/OLED
 // 18 - MISO (built in, also for microSD)
 // 15 - MOSI (built in, also for microSD)
@@ -56,8 +59,8 @@
 //#define BUTTON_3 33
 // moved for easier wire routing in package
 #define BUTTON_1 26
-#define BUTTON_2 12 //25
-#define BUTTON_3 25 //12
+#define BUTTON_2 25 //12 //25
+#define BUTTON_3 12 //25 //12
 #define BUTTON_DEBOUNCE_DELAY   20   // [ms]
 #define BUTTON_COUNT 3
 
@@ -182,6 +185,7 @@ void setup()
 {
   Serial.begin(115200);
   #ifdef DEBUG_VERBOSE
+  delay(1000);
   Serial.println();
   Serial.println();
   Serial.println("YamuraLog Recording Tire Pyrometer V1.0");
@@ -190,10 +194,12 @@ void setup()
   // setup input buttons (debounced)
   for(int buttonIdx = 0; buttonIdx < BUTTON_COUNT; buttonIdx++)
   {
+    #ifdef DEBUG_VERBOSE
     Serial.print("Set up button ");
     Serial.print(buttonIdx + 1);
     Serial.print(" pin ");
     Serial.println(buttonPin[buttonIdx]);
+    #endif
     buttonArray[buttonIdx].registerCallbacks(button_pressedCallback, 
                                              button_releasedCallback, 
                                              button_pressedDurationCallback, 
@@ -203,15 +209,17 @@ void setup()
                                  InputDebounce::PIM_INT_PULL_UP_RES);
   }
 
-
-  Wire.begin();             // start I2C
+  #ifdef DEBUG_VERBOSE
+  Serial.println("Start OLED SPI");
+  #endif
   oledDisplay.begin();
   oledDisplay.setFont(u8g2_font_6x12_tf);
+  
   oledDisplay.clearBuffer();					// clear the internal memory
   oledDisplay.drawStr(0,TEXT_HEIGHT,"Yamura Electronics");	// write something to the internal memory
   oledDisplay.drawStr(0,TEXT_HEIGHT * 2,"Recording Pyrometer");	// write something to the internal memory
   oledDisplay.sendBuffer();					// transfer internal memory to the display
-  delay(10000);
+  delay(5000);
   #ifdef DEBUG_VERBOSE
   Serial.print("OLED screen size ");
   Serial.print(oledDisplay.getWidth());
@@ -219,7 +227,18 @@ void setup()
   Serial.print(oledDisplay.getHeight());
   Serial.println("");
   #endif
-
+  #ifdef DEBUG_VERBOSE
+  Serial.println("Start I2C");
+  #endif
+  // start I2C
+  if(!Wire.begin())            
+  {
+    #ifdef DEBUG_VERBOSE
+    Serial.println("I2C failed to init");
+    #endif
+    while(true);
+  } 
+  #ifdef HAS_THERMO
   tempSensor.begin();       // Uses the default address (0x60) for SparkFun Thermocouple Amplifier
   //check if the sensor is connected
   if(tempSensor.isConnected())
@@ -235,7 +254,10 @@ void setup()
     #endif
     while(1); //hang forever
   }
-
+  oledDisplay.clearBuffer();					// clear the internal memory
+  oledDisplay.drawStr(0, TEXT_HEIGHT,"Thermocouple OK");	// write something to the internal memory
+  oledDisplay.sendBuffer();					// transfer internal memory to the display
+  delay(1000);
   //check if the Device ID is correct
   if(tempSensor.checkDeviceID())
   {
@@ -248,7 +270,10 @@ void setup()
     #ifdef DEBUG_VERBOSE
     Serial.println("Thermocouple ID is not correct! Freezing.");
     #endif
-    while(1);
+    oledDisplay.clearBuffer();					// clear the internal memory
+    oledDisplay.drawStr(0,TEXT_HEIGHT,"thermocouple FAIL");	// write something to the internal memory
+    oledDisplay.sendBuffer();					// transfer internal memory to the display
+    while(true);
   }
   //change the thermocouple type being used
   #ifdef DEBUG_VERBOSE
@@ -376,13 +401,25 @@ void setup()
       #endif
       break;
   }
+  #endif
   #ifdef HAS_RTC
     if (rtc.begin() == false) 
     {
       #ifdef DEBUG_VERBOSE
       Serial.println("RTC not initialized, check wiring");
       #endif
+      oledDisplay.clearBuffer();					// clear the internal memory
+      oledDisplay.drawStr(0,TEXT_HEIGHT,"RTC FAIL");	// write something to the internal memory
+      oledDisplay.sendBuffer();					// transfer internal memory to the display
+      while(true);
     }
+    #ifdef DEBUG_VERBOSE
+    Serial.println("RTC device initialized");
+    #endif
+    oledDisplay.drawStr(0, 2* TEXT_HEIGHT, "RTC OK");	// write something to the internal memory
+    oledDisplay.sendBuffer();					// transfer internal memory to the display
+    delay(1000);
+
     //Use the time from the Arduino compiler (build time) to set the RTC
     //Keep in mind that Arduino does not get the new compiler time every time it compiles. to ensure the proper time is loaded, open up a fresh version of the IDE and load the sketch.
     //if (rtc.setToCompilerTime() == false) 
@@ -395,16 +432,25 @@ void setup()
     Serial.println("RTC online!");
     #endif
   #endif
-
-  Serial.println();
-
-  if(!SD.begin(5))
+  int mountCountAttempt = 0;
+  while(!SD.begin(5))
   {
+    mountCountAttempt++;
     #ifdef DEBUG_VERBOSE
     Serial.println("Card Mount Failed");
     #endif
-    return;
+    sprintf(buf, "microSD FAIL (%d)", mountCountAttempt);
+    oledDisplay.clearBuffer();					// clear the internal memory
+    oledDisplay.drawStr(0,TEXT_HEIGHT, buf);	// write something to the internal memory
+    oledDisplay.sendBuffer();					// transfer internal memory to the display
+    #ifdef DEBUG_VERBOSE
+    Serial.println("retry card mount in 10s");
+    #endif
+    delay(10000);
   }
+  oledDisplay.drawStr(0,3 * TEXT_HEIGHT,"microSD mount OK");	// write something to the internal memory
+  oledDisplay.sendBuffer();					// transfer internal memory to the display
+  delay(1000);
   uint8_t cardType = SD.cardType();
   if(cardType == CARD_NONE)
   {
@@ -441,14 +487,15 @@ void setup()
     #endif
   }
   uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-
   #ifdef DEBUG_VERBOSE
   Serial.printf("SD Card Size: %lluMB\n", cardSize);
   #endif
   // uncomment to write a default setup file
   // maybe check for setup and write one if needed?
-  //DeleteFile(SD, "/py_setup.txt");
-  //WriteSetupFile(SD, "/py_setup.txt");
+  #ifdef WRITE_INI
+  DeleteFile(SD, "/py_setup.txt");
+  WriteSetupFile(SD, "/py_setup.txt");
+  #endif
   ReadSetupFile(SD,  "/py_setup.txt");
 
   ResetTempStable();
@@ -466,12 +513,14 @@ void setup()
     #endif
   }
   #endif
-  oledDisplay.clearBuffer();
-  oledDisplay.drawStr(5,TEXT_HEIGHT,"Ready!");	// write something to the internal memory
   #ifdef HAS_RTC
-  oledDisplay.drawStr(5, 2 * TEXT_HEIGHT, rtc.stringTime());
-  oledDisplay.drawStr(5, 3 * TEXT_HEIGHT, rtc.stringDateUSA());
+  oledDisplay.drawStr(5, 4 * TEXT_HEIGHT, rtc.stringTime());
+  oledDisplay.drawStr(5, 5 * TEXT_HEIGHT, rtc.stringDateUSA());
+  #else
+  oledDisplay.drawStr(5, 4 * TEXT_HEIGHT,"Ready!");	// write something to the internal memory
   #endif
+  oledDisplay.sendBuffer();					// transfer internal memory to the display
+  
   prior = millis();
   deviceState = DISPLAY_MENU;
 
@@ -504,7 +553,7 @@ void setup()
   Serial.println("HTTP server started");
   #endif
   sprintf(buf, "IP %d.%d.%d.%d", IP[0], IP[1], IP[2], IP[3]);
-  oledDisplay.drawStr(5, 4 * TEXT_HEIGHT, buf);
+  oledDisplay.drawStr(5, 5 * TEXT_HEIGHT, buf);
   oledDisplay.sendBuffer();					// transfer internal memory to the display
   delay(5000);
 }
@@ -664,7 +713,11 @@ void MeasureTireTemps()
         // read temp, check for stable temp, light LED if stable
         if(armed)
         {
+          #ifdef HAS_THERMO
           currentTemps[(tireIdx * cars[selectedCar].positionCount) + measIdx] = tempSensor.getThermocoupleTemp(tempUnits); // false for F, true or empty for C
+          #else
+          currentTemps[(tireIdx * cars[selectedCar].positionCount) + measIdx] = 100;
+          #endif
           tempStable = CheckTempStable(currentTemps[(tireIdx * cars[selectedCar].positionCount) + measIdx]);
         }
         // text string location
@@ -794,8 +847,12 @@ void InstantTemp()
     if(curTime - priorTime > 1000)
     {
       priorTime = curTime;
-      // read temp, check for stable temp, light LED if stable
+      // read temp
+      #ifdef HAS_THERMO
       instant_temp = tempSensor.getThermocoupleTemp(tempUnits); // false for F, true or empty for C
+      #else
+      instant_temp = 100.0F;
+      #endif
       #ifdef VERBOSE_DEBUG
       Serial.print("Instant temp ");
       Serial.println(instant_temp);
@@ -930,7 +987,7 @@ void DisplayTireTemps(CarSettings currentResultCar)
     }
   }
 }
-//MenuSelect
+//
 //
 //
 int MenuSelect(MenuChoice choices[], int menuCount, int linesToDisplay, int initialSelect)
